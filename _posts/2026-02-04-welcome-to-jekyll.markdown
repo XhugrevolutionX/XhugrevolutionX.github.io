@@ -15,6 +15,9 @@ Every graphics engine begins with the "Hello World" of rendering: a triangle. Th
 
 ### Rendering a Triangle
 In my `Triangle` sample, the process involves the raw basics:
+
+![Local Image](/images/triangle.png)
+
 * **Shader Compilation:** Loading, compiling, and linking `.vert` and `.frag` files into a program.
 * **Buffer Management:** I define vertices containing positions and colors, upload them to a **VBO (Vertex Buffer Object)**, and configure the layout using a **VAO (Vertex Array Object)**.
 * **The Draw Call:** The render loop binds the shader and VAO, then calls `glDrawArrays` to push the geometry to the screen.
