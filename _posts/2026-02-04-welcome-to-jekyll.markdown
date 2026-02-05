@@ -103,6 +103,12 @@ The `Mesh::setupMesh()` function handles the heavy lifting of GPU memory allocat
 #### The Render Pipeline & Material Mapping
 When drawing, the `Mesh::Draw` function iterates through its assigned textures and binds them to the GPU using `glActiveTexture`. To make the shaders flexible, I map internal texture types (like `texture_diffuse`) to specific sampler names (like `material_diffuse`) required by the shader pipeline. This abstraction allows the engine to handle different material properties without hardcoding texture units.
 
+```glsl
+uniform sampler2D material_diffuse;
+uniform sampler2D material_specular;
+uniform sampler2D material_normal;
+```
+
 ## 3. Lighting, Shadows & Depth
 Once geometry is on screen, the next step is making it look 3D.
 
