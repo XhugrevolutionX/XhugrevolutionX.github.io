@@ -54,10 +54,11 @@ I implemented a generalized kernel processor that samples 3x3 neighboring pixels
 * **Blur:** Averages neighboring pixels to soften the image.
 * **Edge Detection:** Highlights areas of high contrast, useful for "toon" outlines or debugging geometry.
 
-### Color Filters
+### Color Filters & Retro Effects
 Simple math operations allow for rapid stylistic changes:
 * **Inversion:** `1.0 - color`. Creates a negative film look.
 * **Grayscale:** Converts the RGB image to black and white by dotting the color with human eye sensitivity weights (`vec3(0.21, 0.71, 0.07)`).
+* **Dithering:** To achieve a retro, 1-bit aesthetic, I implemented **Ordered Dithering**. I defined a 4x4 Bayer Matrix in the shader and mapped screen coordinates (`gl_FragCoord`) to this grid. By comparing the pixel's brightness against the threshold in the matrix, the engine quantizes the image into a cross-hatch pattern.
 
 ### Bloom & HDR
 Finally, the engine applies **HDR Tone Mapping** (converting high-precision floating point colors to LDR) and **Bloom**. The Bloom effect works by extracting bright regions of the image, blurring them with a Gaussian filter, and additively blending them back on top of the original scene.
