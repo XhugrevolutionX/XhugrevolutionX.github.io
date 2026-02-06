@@ -1,177 +1,217 @@
 ---
 layout: post
-title: "Building a Custom Graphics Engine: From Triangles to PBR"
+title: "Architecting a High-Performance GLES 3.0 Renderer: A Deep Dive"
 date: 2026-02-05
 categories: [Graphics Programming, C++, OpenGL]
 tags: [Deferred Shading, PBR, IBL, Instancing, SSAO, Post-Processing]
 ---
 
-Developing a graphics engine is a journey of layering complexity. What starts as a simple `glDrawArrays` call eventually evolves into a complex pipeline managing gigabytes of texture data and millions of polygons.
+Developing a custom graphics engine is an exercise in managing the intricate dance between CPU data orchestration and GPU parallelism. What began as a foundational exploration of the graphics pipeline has evolved into a feature-complete OpenGL ES 3.0 renderer capable of deferred shading, physically-based effects, and high-density geometry instancing.
 
-In this post, I’ll walk through the technical implementation of my engine, built with C++ and OpenGL ES 3.0, detailing how each system was constructed.
+In this post, I break down the core architecture and the technical hurdles overcome during the development of this engine.
 
-## 1. The Basics: Primitives & Geometry
-Every graphics engine begins with the "Hello World" of rendering: a triangle. This seemingly simple task establishes the core infrastructure for communicating with the GPU.
+## 🛠 Engine Overview & Features
+* **Core API:** OpenGL ES 3.0 / C++.
+* **Rendering Path:** Multi-pass Deferred Shading.
+* **Lighting Model:** Blinn-Phong & PBR (Cook-Torrance BRDF).
+* **Optimization:** Hardware Instancing and Texture Batching.
 
-### Rendering a Triangle
-In my `Triangle` sample, the process involves the raw basics:
+---
 
-![Triangle Image](/images/triangle.png)
+## 🏗 Asset Architecture: The Model-Mesh Hierarchy
 
-* **Shader Compilation:** Loading, compiling, and linking `.vert` and `.frag` files into a program.
-* **Buffer Management:** I define vertices containing positions and colors, upload them to a **VBO (Vertex Buffer Object)**, and configure the layout using a **VAO (Vertex Array Object)**.
-* **The Draw Call:** The render loop binds the shader and VAO, then calls `glDrawArrays` to push the geometry to the screen.
+A major challenge in engine design is translating complex 3D file formats into a format the GPU can consume efficiently. I utilized a hierarchical structure where a `Model` serves as a manager for multiple `Mesh` units.
 
-### Scaling Up: Squares & Indices
-A square isn't a native primitive in OpenGL; it's constructed from two triangles. To render this efficiently, I introduced the **EBO (Element Buffer Object)** in the `Square` class.
+### Recursive Scene Parsing
+Using **Assimp**, the engine recursively traverses the node tree of a 3D file. This is critical for maintaining parent-child transformations—ensuring that if a character's arm moves, the hand follows. During this pass, I also compute the **Axis-Aligned Bounding Box (AABB)** by tracking the `minBounds` and `maxBounds` of every vertex to facilitate future frustum culling.
 
-Instead of duplicating vertices for the shared edge, I store unique vertices in the VBO and a list of indices (e.g., `0, 1, 3, 1, 2, 3`) in the EBO. The draw call changes to `glDrawElements`, which tells the GPU to assemble triangles by looking up these indices, saving memory.
 
-## 2. Handling Assets: Textures & Models
-Before loading complex 3D meshes, the engine needs to handle the most fundamental asset: the texture.
 
-### Texture Loading
-To bring images into OpenGL, I integrated the **stb_image** library. My `TextureFromFile` helper function handles the raw byte management:
+### The Mesh Data Payload
+To minimize draw call overhead, each `Mesh` encapsulates its own Vertex Array Object (VAO). I defined a packed `Vertex` structure to ensure high cache locality during vertex fetching.
 
 ```cpp
-inline unsigned int TextureFromFile(const char *path, const std::string &directory) {
-    std::string filename = std::string(path);
+struct Vertex {
+    glm::vec3 Position;
+    glm::vec3 Normal;
+    glm::vec2 TexCoords;
+};
+```
 
-    filename = directory + '/' + filename;
+```cpp
+class Mesh {
+public:
+    std::vector<Vertex>       vertices;
+    std::vector<unsigned int> indices;
+    std::vector<Texture>      textures;
+    // ... Methods
+};
+```
+
+The `setupMesh()` function is where the CPU-to-GPU handoff occurs. By using `glVertexAttribPointer` with the `offsetof` macro, the engine tells the GPU exactly how to stride through the memory buffer to find positions, normals, and UVs.
 
 
 
-    unsigned int textureID;
+```cpp
+// Vertex Positions
+glEnableVertexAttribArray(0);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), nullptr);
 
-    glGenTextures(1, &textureID);
+// Vertex Normals
+glEnableVertexAttribArray(1);
+glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, Normal)));
+
+// Vertex Texture Coords
+glEnableVertexAttribArray(2);
+glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, TexCoords)));
+```
+
+---
+
+## 🎨 The Rendering Pipeline: Deferred Shading
+
+To support hundreds of dynamic lights without a massive performance hit, I implemented a **Deferred Shading** path. This splits rendering into two distinct phases:
+
+### Phase 1: The Geometry Pass (G-Buffer)
+Instead of calculating lighting immediately, the engine renders geometric properties into a series of high-precision textures known as the **G-Buffer**.
+
+* **gPosition**: World-space coordinates using `GL_RGBA16F` to prevent precision-loss artifacts at a distance.
+* **gNormal**: Unit vectors representing the surface orientation, used for calculating light reflection.
+* **gAlbedoSpec**: A composite texture where RGB channels store the base color and the Alpha channel stores specular intensity.
+
+#### G-Buffer Visualizations
+Below is the raw data captured by the G-Buffer before the lighting pass is applied:
+
+<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/position.png" alt="Position" style="width: 100%; border-radius: 4px;">
+      <br><em>Position (World Space)</em>
+    </td>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/normal.png" alt="Normal" style="width: 100%; border-radius: 4px;">
+      <br><em>Normal (Surface Vectors)</em>
+    </td>
+  </tr>
+  <tr>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/albedo.png" alt="Albedo" style="width: 100%; border-radius: 4px;">
+      <br><em>Albedo (Base Color)</em>
+    </td>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/specular.png" alt="Specular" style="width: 100%; border-radius: 4px;">
+      <br><em>Specular (Material Shine)</em>
+    </td>
+  </tr>
+</table>
+
+### Phase 2: The Lighting Pass
+A full-screen quad is rendered using the G-Buffer textures as inputs. Lighting is calculated only for the pixels that are actually visible on screen, effectively decoupling lighting complexity from geometric complexity.
+
+---
+
+## 💡 Lighting & Shadow Implementation
+
+### The Blinn-Phong Model
+While standard Phong lighting calculates specular highlights based on a reflection vector, I opted for the **Blinn-Phong** model. It is more computationally efficient and avoids the specular "cutoff" artifacts that occur when the angle between the view and reflection vectors exceeds 90 degrees.
+
+The core of this model is the **Halfway Vector (H)**. This represents the direction exactly halfway between the light source and the viewer. 
+
+**Calculation Logic:**
+
+1.  **The Halfway Vector**: We sum the **Light Direction (L)** and the **View Direction (V)**, then normalize the resulting vector.
+    * **H = Normalize(L + V)**
+2.  **Specular Intensity**: We calculate the dot product between the surface **Normal (N)** and the **Halfway Vector (H)**, then raise it to the power of the material's **Shininess (s)**.
+    * **Specular = pow(max(dot(N, H), 0.0), s)**
 
 
 
-    int w, h, c;
+This approach is faster because it avoids the expensive calculation of a reflection vector per fragment and provides a more consistent highlight even when the camera moves at sharp angles.
 
-    if (unsigned char *data = stbi_load(filename.c_str(), &w, &h, &c, 0)) {
+### Dynamic Shadow Mapping
+To ground objects in the scene, the engine utilizes two distinct shadow techniques depending on the light source:
 
-        GLenum format = (c == 3) ? GL_RGB : GL_RGBA;
+**1. Directional Shadows (The Sun)**
+These use an **Orthographic projection** to render a 2D depth map from the sun's perspective. Because the sun is infinitely far away, we treat all light rays as parallel. We "record" the distance of every object from the sun into a texture; if a fragment is further away than the value in the texture, it is in shadow.
 
-        glBindTexture(GL_TEXTURE_2D, textureID);
-        glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
+**2. Omnidirectional Point Shadows (Lamps/Torches)**
+Point lights radiate in all directions, so a single 2D map is insufficient. I implemented **Depth Cubemaps**. The scene is rendered six times per point light—once for each face of a cube (Up, Down, Left, Right, Forward, Backward). 
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+In the lighting shader, we calculate the vector from the light to the fragment to "sample" the correct face of the cubemap:
 
-        stbi_image_free(data);
-    } else {
+```cpp
+// Calculating distance for Omni-directional shadows
+float closestDepth = texture(shadowMap, fragToLight).r;
+closestDepth *= far_plane; // Convert from [0,1] back to world distance
+float currentDepth = length(fragToLight);
 
-        std::cout << "Texture failed to load at path: " << filename << std::endl;
+// Apply a small bias to prevent "shadow acne"
+float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
+```
 
-        stbi_image_free(data);
+---
+
+## 🚀 Performance Optimizations: GPU Instancing
+
+Rendering thousands of individual objects creates a massive bottleneck due to repeated draw calls. I solved this by implementing **Hardware Instancing**.
+
+```cpp
+ //Link the Instance VBO to this Mesh's VAO
+void SetupInstancingAttributes(const GLuint instanceVBO) const {
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
+
+    for (int i = 0; i < 4; i++) {
+        constexpr std::size_t vec4Size = sizeof(glm::vec4);
+        glEnableVertexAttribArray(5 + i);
+        glVertexAttribPointer(5 + i, 4, GL_FLOAT, GL_FALSE, 4 * vec4Size, reinterpret_cast<void *>(i * vec4Size));
+        glVertexAttribDivisor(5 + i, 1);
     }
-    return textureID;
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 ```
 
-1.  **Loading:** `stbi_load` reads the image file (JPG/PNG) into an array of unsigned chars.
-2.  **Generation:** I generate an OpenGL texture ID with `glGenTextures`.
-3.  **Parameters:** Crucial for quality. I set `GL_REPEAT` for wrapping and `GL_LINEAR_MIPMAP_LINEAR` for minification filtering to prevent aliasing artifacts at a distance.
-4.  **Upload:** `glTexImage2D` pushes the pixel data to the GPU, followed by `glGenerateMipmap` to create the mip chain.
-
-### Model Loading & Mesh Architecture
-To support complex 3D assets, I built a robust loading system using **Assimp**. In this engine, a `Model` is a high-level container that manages a hierarchy of `Mesh` objects.
-
-#### The Recursive Scene Graph
-My `Model::Load` function initiates an `Assimp::Importer`, which parses the file into a scene graph. Because 3D models are often composed of many separate parts, I implemented `processNode` to traverse the `aiNode` tree recursively. This ensures that parent-child transformations and multiple sub-meshes are handled correctly. During this process, I also calculate the model's bounding box and radius by tracking the minimum and maximum vertex positions across all meshes.
-
-#### Anatomy of a Mesh
-Each `Mesh` object represents a single drawable entity. I defined a `Vertex` structure to pack all necessary data into a single buffer:
+By storing model matrices in a separate VBO and using `glVertexAttribDivisor`, the GPU can render thousands of instances in a single call, updating the transformation matrix only once per instance.
 
 ```cpp
-    struct Vertex {
-        glm::vec3 Position;
-        glm::vec3 Normal;
-        glm::vec2 TexCoords;
-    };
+glBindVertexArray(VAO);
+//Instanced Draw Call
+glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, instanceCount);
 ```
 
-The `Mesh::setupMesh()` function handles the heavy lifting of GPU memory allocation. It generates a **VAO**, **VBO**, and **EBO**, then uses `glVertexAttribPointer` with the `offsetof` macro to tell OpenGL exactly how to read the `Vertex` struct:
-* **Location 0:** Positions ($x, y, z$).
-* **Location 1:** Normals.
-* **Location 2:** Texture Coordinates ($u, v$).
+---
 
-#### The Render Pipeline & Material Mapping
-When drawing, the `Mesh::Draw` function iterates through its assigned textures and binds them to the GPU using `glActiveTexture`. To make the shaders flexible, I map internal texture types (like `texture_diffuse`) to specific sampler names (like `material_diffuse`) required by the shader pipeline. This abstraction allows the engine to handle different material properties without hardcoding texture units.
+## 🖼 Post-Processing Stack
 
-```glsl
-uniform sampler2D material_diffuse;
-uniform sampler2D material_specular;
-uniform sampler2D material_normal;
-```
+The final image is passed through a custom framebuffer stack. I implemented several filters to enhance the visual fidelity or create specific styles:
 
-## 3. Lighting, Shadows & Depth
-Once geometry is on screen, the next step is making it look 3D.
+* **Bloom**: Extracting bright areas via a threshold and applying a separable Gaussian blur to create light "bleeding".
+* **HDR & Tone Mapping**: Rendering to a floating-point framebuffer (`GL_RGBA16F`) and using Reinhard tone mapping to preserve details in high-intensity areas.
+* **Ordered Dithering**: A retro 1-bit aesthetic achieved by comparing pixel brightness against a 4x4 Bayer Matrix.
 
-### The Lighting Model
-I implemented a standard **Blinn-Phong** lighting model, managed by a `LightManager`. The engine supports three distinct light types:
-1.  **Directional Light:** Simulates the sun with parallel rays.
-2.  **Point Lights:** Radiate in all directions with **attenuation** (calculated using constant, linear, and quadratic terms).
-3.  **Spotlights:** Defined by a direction and two cones (inner and outer cutoff) for soft edges.
+---
 
-### Visualizing Lights (Gizmos)
-Debugging invisible lights is difficult, so I created a `LightGizmo` class. It renders a cube at the light's position, but with a visual trick: inside `gizmo.frag`, I check the brightness of the color. If it's a pure white light, I output it to a separate buffer. This allows the light source to physically "glow" when Bloom is applied later.
+## 🧪 The PBR Testbed & Image-Based Lighting
 
-### Advanced Shadows
-To prevent the scene from looking flat, I implemented two shadow techniques:
-* **Directional Shadows:** Uses an orthographic projection to render a depth map from the "Sun's" perspective.
-* **Omni-directional Point Shadows:** Since point lights shine everywhere, I render the scene *six times* into a **Depth Cubemap**. The fragment shader calculates the linear distance from the light to determine occlusion.
+While the main engine uses a Blinn-Phong model for performance, I implemented a separate "PBR Testbed" scene to explore **Physically Based Rendering**.
 
-### SSAO (Screen Space Ambient Occlusion)
-To ground objects in the scene, I implemented SSAO. This technique estimates how exposed a point is to ambient light.
-1.  **Kernel:** I generate a hemisphere of 64 random samples.
-2.  **Noise:** A 4x4 rotation noise texture jitters the samples to reduce banding.
-3.  **Blur:** A final pass blurs the result to create smooth contact shadows in crevices.
+This implementation relies on the **Cook-Torrance BRDF**, focusing on microfacet theory and energy conservation. To ground the objects, I added **Image-Based Lighting (IBL)**, which pre-computes environment maps to provide realistic diffuse and specular reflections.
 
-## 4. The Main Scene: Architecture & Pipeline
-The main scene brings everything together using a high-performance **Deferred Rendering** pipeline.
-
-### Deferred Rendering & The G-Buffer
-Forward rendering struggles with many lights (M*N complexity). I solved this using a **Deferred** approach.
-1.  **Geometry Pass:** I render the scene into a **G-Buffer** with multiple render targets (MRT) using `GL_RGBA16F` precision:
-    * `gPosition`: World space positions.
-    * `gNormal`: World space normals.
-    * `gAlbedoSpec`: Color and specular intensity.
-2.  **Lighting Pass:** A full-screen quad samples these textures to calculate lighting for hundreds of lights cheaply.
+* **Irradiance Map**: Pre-convoluted map for ambient diffuse lighting.
+* **Prefilter Map**: Captures environment reflections at varying roughness levels.
 
 
 
-**Debug Modes:**
-To diagnose the G-Buffer, I added debug modes in `deferred.frag` to visualize the raw textures:
-* **Mode 1/2:** Visualize Position/Normal textures.
-* **Mode 3/4:** Visualize Albedo/Specular data.
+Currently, this system exists in a standalone scene. Merging it with the main Deferred pipeline remains a technical challenge, primarily due to the increased complexity of the G-Buffer (requiring additional channels for Metallic, Roughness, and Ambient Occlusion) and the overhead of real-time IBL sampling.
 
-### Optimization: GPU Instancing
-Rendering thousands of cubes individually is a CPU bottleneck. I implemented **GPU Instancing**.
-* I store model matrices in a separate VBO.
-* I use `glVertexAttribDivisor` to update the matrix only once per instance.
-* The vertex shader applies the instance matrix to the positions.
-This allows drawing thousands of meshes in a single API call.
+---
 
-## 5. The Post-Processing Stack
-The `Framebuffer` class manages the final polish of the image.
-
-* **Convolution Kernels:** Support for Sharpen, Blur, and Edge Detection using 3x3 kernel matrices.
-* **Bloom:** Bright areas are extracted, blurred via Gaussian blur, and added back to the scene.
-* **HDR Tone Mapping:** Exposure-based mapping from HDR to LDR.
-* **Retro Dithering:** To achieve a 1-bit retro look, I implemented **Ordered Dithering**. I defined a 4x4 Bayer Matrix in the shader and mapped screen coordinates to this grid. By comparing the pixel's brightness against the threshold in the matrix, the engine quantizes the image into a cross-hatch pattern.
-
-## 6. The PBR Extension
-While the main scene relies on Deferred Blinn-Phong, I built a separate "Testbed" scene to implement **Physically Based Rendering (PBR)**.
-
-This scene uses the Cook-Torrance BRDF and a runtime **Image Based Lighting (IBL)** generator. On startup, the engine processes an HDR equirectangular map into:
-1.  **Irradiance Map:** For diffuse lighting.
-2.  **Prefilter Map:** For specular reflections at varying roughness.
-3.  **BRDF LUT:** A pre-computed lookup table.
+## 🔍 Technical Challenges & Lessons
+* **Memory Management**: Ensuring textures are shared via a `textures_loaded` vector to prevent redundant VRAM usage.
+* **Precision Issues**: Moving to 16-bit floating-point buffers for the G-Buffer to avoid "banding" in lighting gradients.
+* **Coordinate Systems**: Handling the UV-flip and winding order differences between Assimp's default and OpenGL's expectations.
 
 ## Conclusion
-Building this engine has been an exhaustive exercise in modern graphics programming. From the initial struggle of getting a triangle on screen to the satisfaction of seeing PBR materials reacting to an HDR environment, every step revealed the intricate dance between CPU data management and GPU parallelism.
+Building this engine provided a deep understanding of how modern renderers handle data at scale. Moving from a single triangle to a deferred system was a challenge in both math and architecture, resulting in a flexible platform for further graphics experimentation.
