@@ -130,7 +130,7 @@ float spec = pow(max(dot(normal, halfwayDir), 0.0), specularPow);
 To ground objects in the scene, the engine utilizes two distinct shadow techniques depending on the light source:
 
 **1. Directional Shadows (The Sun)**
-These use an **Orthographic projection** to render a 2D depth map from the sun's perspective. We "record" the distance of every object from the sun into a texture; if a fragment is further away than the value in the texture, it is in shadow.
+These use an **Orthographic projection** to render a 2D depth map from the sun's perspective. Because the sun is infinitely far away, we treat all light rays as parallel. We "record" the distance of every object from the sun into a texture; if a fragment is further away than the value in the texture, it is in shadow.
 
 **2. Omnidirectional Point Shadows (Lamps/Torches)**
 Point lights radiate in all directions, so a single 2D map is insufficient. I implemented **Depth Cubemaps**. The scene is rendered six times per point light—once for each face of a cube. 
@@ -198,13 +198,43 @@ By storing model matrices in a separate VBO and using `glVertexAttribDivisor`, t
 
 ## 🖼 Post-Processing Stack
 
-The final image is passed through a custom framebuffer stack. The engine currently supports the following post-processing modes:
+The final image is passed through a custom framebuffer stack. The engine currently supports several post-processing modes, ranging from artistic filters to technical debug layers:
 
-* **None (0)**: Raw output from the lighting pass.
-* **Inverse (1) & Grayscale (2)**: Fundamental color manipulation filters.
-* **Convolution Kernels**: Including **Sharpen (3)**, **Blur (4)**, and **Edge Detection (5)**.
-* **DEBUG_BLOOM_LAYER (6)**: A utility mode to visualize the extracted bright-pass layer used for Bloom.
-* **Dithering (7)**: A retro 1-bit aesthetic achieved by comparing pixel brightness against a 4x4 Bayer Matrix.
+<div style="text-align: center; margin-bottom: 20px;">
+  <img src="/images/none.png" alt="None" style="width: 50%; border-radius: 4px;">
+  <br><em>None (0) - Raw Output</em>
+</div>
+
+<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/inverse.png" alt="Inverse" style="width: 100%; border-radius: 4px;">
+      <br><em>Inverse (1)</em>
+    </td>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/grayscale.png" alt="Grayscale" style="width: 100%; border-radius: 4px;">
+      <br><em>Grayscale (2)</em>
+    </td>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/sharpen.png" alt="Sharpen" style="width: 100%; border-radius: 4px;">
+      <br><em>Sharpen (3)</em>
+    </td>
+  </tr>
+  <tr>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/blur.png" alt="Blur" style="width: 100%; border-radius: 4px;">
+      <br><em>Blur (4)</em>
+    </td>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/edge_detection.png" alt="Edge Detection" style="width: 100%; border-radius: 4px;">
+      <br><em>Edge Detection (5)</em>
+    </td>
+    <td style="width: 33%; padding: 5px; text-align: center;">
+      <img src="/images/dithering.png" alt="Dithering" style="width: 100%; border-radius: 4px;">
+      <br><em>Dithering (7)</em>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -212,12 +242,12 @@ The final image is passed through a custom framebuffer stack. The engine current
 
 While the main engine uses a Blinn-Phong model for performance, I implemented a separate "PBR Testbed" scene to explore **Physically Based Rendering**.
 
+![PBR Scene Showcase](/images/pbr.png)
+
 This implementation relies on the **Cook-Torrance BRDF**, focusing on microfacet theory and energy conservation. To ground the objects, I added **Image-Based Lighting (IBL)**, which pre-computes environment maps to provide realistic diffuse and specular reflections.
 
 * **Irradiance Map**: Pre-convoluted map for ambient diffuse lighting.
 * **Prefilter Map**: Captures environment reflections at varying roughness levels.
-
-
 
 Currently, this system exists in a standalone scene. Merging it with the main Deferred pipeline remains a technical challenge, primarily due to the increased complexity of the G-Buffer (requiring additional channels for Metallic, Roughness, and Ambient Occlusion) and the overhead of real-time IBL sampling.
 
