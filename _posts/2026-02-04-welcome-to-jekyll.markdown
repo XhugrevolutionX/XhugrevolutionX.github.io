@@ -55,15 +55,15 @@ The `setupMesh()` function is where the CPU-to-GPU handoff occurs. By using `glV
 ```cpp
 // Vertex Positions
 glEnableVertexAttribArray(0);
-glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), nullptr);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
 
 // Vertex Normals
 glEnableVertexAttribArray(1);
-glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, Normal)));
+glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
 
 // Vertex Texture Coords
 glEnableVertexAttribArray(2);
-glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, TexCoords)));
+glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, TexCoords));
 ```
 
 ---
@@ -117,37 +117,56 @@ While standard Phong lighting calculates specular highlights based on a reflecti
 
 The core of this model is the **Halfway Vector (H)**. This represents the direction exactly halfway between the light source and the viewer. 
 
-**Calculation Logic:**
-
-1.  **The Halfway Vector**: We sum the **Light Direction (L)** and the **View Direction (V)**, then normalize the resulting vector.
-    * **H = Normalize(L + V)**
-2.  **Specular Intensity**: We calculate the dot product between the surface **Normal (N)** and the **Halfway Vector (H)**, then raise it to the power of the material's **Shininess (s)**.
-    * **Specular = pow(max(dot(N, H), 0.0), s)**
-
-
-
-This approach is faster because it avoids the expensive calculation of a reflection vector per fragment and provides a more consistent highlight even when the camera moves at sharp angles.
+```glsl
+vec3 lightDir = normalize(-light.direction);
+// Diffuse
+float diff = max(dot(normal, lightDir), 0.0);
+// Specular
+vec3 halfwayDir = normalize(lightDir + viewDir);
+float spec = pow(max(dot(normal, halfwayDir), 0.0), specularPow);
+```
 
 ### Dynamic Shadow Mapping
 To ground objects in the scene, the engine utilizes two distinct shadow techniques depending on the light source:
 
 **1. Directional Shadows (The Sun)**
-These use an **Orthographic projection** to render a 2D depth map from the sun's perspective. Because the sun is infinitely far away, we treat all light rays as parallel. We "record" the distance of every object from the sun into a texture; if a fragment is further away than the value in the texture, it is in shadow.
+These use an **Orthographic projection** to render a 2D depth map from the sun's perspective. We "record" the distance of every object from the sun into a texture; if a fragment is further away than the value in the texture, it is in shadow.
 
 **2. Omnidirectional Point Shadows (Lamps/Torches)**
-Point lights radiate in all directions, so a single 2D map is insufficient. I implemented **Depth Cubemaps**. The scene is rendered six times per point light—once for each face of a cube (Up, Down, Left, Right, Forward, Backward). 
+Point lights radiate in all directions, so a single 2D map is insufficient. I implemented **Depth Cubemaps**. The scene is rendered six times per point light—once for each face of a cube. 
 
-In the lighting shader, we calculate the vector from the light to the fragment to "sample" the correct face of the cubemap:
+```glsl
+float shadow = 0.0;
+float bias = 0.15; // Higher bias needed for perspective shadows
 
-```cpp
-// Calculating distance for Omni-directional shadows
+// Sample the linear depth we wrote in shadow_point.frag
 float closestDepth = texture(shadowMap, fragToLight).r;
-closestDepth *= far_plane; // Convert from [0,1] back to world distance
-float currentDepth = length(fragToLight);
+closestDepth *= pointFarPlane; // Remap [0,1] back to [0, far]
 
-// Apply a small bias to prevent "shadow acne"
-float shadow = currentDepth - bias > closestDepth ? 1.0 : 0.0;
+if(currentDepth - bias > closestDepth)
+    shadow = 1.0;
 ```
+
+![Dynamic Point Shadows Showcase](/images/point_shadows.gif)
+
+### SSAO (Screen Space Ambient Occlusion)
+To add a final layer of realism to the lighting, I implemented SSAO. By simulating soft ambient shadows in crevices, the geometry feels "grounded" in a way that standard local lighting models cannot achieve. 
+
+#### SSAO Comparison
+Notice how SSAO adds subtle contact shadows where the brick surfaces meet, significantly increasing the sense of depth.
+
+<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/no_ssao.png" alt="Without SSAO" style="width: 100%; border-radius: 4px;">
+      <br><em>Without SSAO</em>
+    </td>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/ssao.png" alt="With SSAO" style="width: 100%; border-radius: 4px;">
+      <br><em>With SSAO</em>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -175,21 +194,17 @@ void SetupInstancingAttributes(const GLuint instanceVBO) const {
 
 By storing model matrices in a separate VBO and using `glVertexAttribDivisor`, the GPU can render thousands of instances in a single call, updating the transformation matrix only once per instance.
 
-```cpp
-glBindVertexArray(VAO);
-//Instanced Draw Call
-glDrawElementsInstanced(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr, instanceCount);
-```
-
 ---
 
 ## 🖼 Post-Processing Stack
 
-The final image is passed through a custom framebuffer stack. I implemented several filters to enhance the visual fidelity or create specific styles:
+The final image is passed through a custom framebuffer stack. The engine currently supports the following post-processing modes:
 
-* **Bloom**: Extracting bright areas via a threshold and applying a separable Gaussian blur to create light "bleeding".
-* **HDR & Tone Mapping**: Rendering to a floating-point framebuffer (`GL_RGBA16F`) and using Reinhard tone mapping to preserve details in high-intensity areas.
-* **Ordered Dithering**: A retro 1-bit aesthetic achieved by comparing pixel brightness against a 4x4 Bayer Matrix.
+* **None (0)**: Raw output from the lighting pass.
+* **Inverse (1) & Grayscale (2)**: Fundamental color manipulation filters.
+* **Convolution Kernels**: Including **Sharpen (3)**, **Blur (4)**, and **Edge Detection (5)**.
+* **DEBUG_BLOOM_LAYER (6)**: A utility mode to visualize the extracted bright-pass layer used for Bloom.
+* **Dithering (7)**: A retro 1-bit aesthetic achieved by comparing pixel brightness against a 4x4 Bayer Matrix.
 
 ---
 
