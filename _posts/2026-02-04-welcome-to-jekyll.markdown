@@ -25,8 +25,6 @@ A major challenge in engine design is translating complex 3D file formats into a
 ### Recursive Scene Parsing
 Using **Assimp**, the engine recursively traverses the node tree of a 3D file. This is critical for maintaining parent-child transformations—ensuring that if a character's arm moves, the hand follows. During this pass, I also compute the **Axis-Aligned Bounding Box (AABB)** by tracking the `minBounds` and `maxBounds` of every vertex to facilitate future frustum culling.
 
-
-
 ### The Mesh Data Payload
 To minimize draw call overhead, each `Mesh` encapsulates its own Vertex Array Object (VAO). I defined a packed `Vertex` structure to ensure high cache locality during vertex fetching.
 
@@ -49,8 +47,6 @@ public:
 ```
 
 The `setupMesh()` function is where the CPU-to-GPU handoff occurs. By using `glVertexAttribPointer` with the `offsetof` macro, the engine tells the GPU exactly how to stride through the memory buffer to find positions, normals, and UVs.
-
-
 
 ```cpp
 // Vertex Positions
@@ -150,7 +146,79 @@ if(currentDepth - bias > closestDepth)
 ![Dynamic Point Shadows Showcase](/images/point_shadows.gif)
 
 ### SSAO (Screen Space Ambient Occlusion)
-To add a final layer of realism to the lighting, I implemented SSAO. By simulating soft ambient shadows in crevices, the geometry feels "grounded" in a way that standard local lighting models cannot achieve. 
+To add a final layer of realism to the lighting, I implemented **SSAO**. By simulating soft ambient shadows in crevices, the geometry feels "grounded" in a way that standard local lighting models cannot achieve.
+
+My implementation operates in two distinct passes: **Occlusion Generation** and **Blurring**.
+
+#### Pass 1: Generating the Occlusion Kernel
+The core of SSAO involves sampling the depth buffer around a fragment to determine how "occluded" it is by surrounding geometry. I generate a hemisphere of 64 random sample vectors oriented around the surface normal.
+
+```cpp
+// Generating the hemispherical kernel
+for (unsigned int i = 0; i < 64; ++i) {
+    // Random samples in a hemisphere
+    glm::vec3 sample(randomValues(generator) * 2.0 - 1.0,
+                     randomValues(generator) * 2.0 - 1.0,
+                     randomValues(generator));
+    sample = glm::normalize(sample);
+    sample *= randomValues(generator);
+
+    // Scale samples so they are clustered closer to the origin
+    float scale = (float)i / 64.0f;
+    scale = lerp(0.1f, 1.0f, scale * scale);
+    ssaoKernel.push_back(sample * scale);
+}
+```
+
+These samples are then sent to the shader via uniforms:
+
+```cpp
+for (unsigned int i = 0; i < 64; ++i) {
+    ssaoPipeline.SetVec3(("samples[" + std::to_string(i) + "]").c_str(), 
+                         ssaoKernel[i].x, ssaoKernel[i].y, ssaoKernel[i].z);
+}
+```
+
+In the fragment shader, we iterate through these samples, transform them into screen space, and compare their depth against the actual depth value in the G-Buffer. If the sample's depth is behind the surface depth, it contributes to occlusion.
+
+```glsl
+float occlusion = 0.0;
+for(int i = 0; i < 64; ++i) {
+    // Get sample position in view space
+    vec3 samplePos = TBN * samples[i]; 
+    samplePos = fragPos + samplePos * radius; 
+
+    // Project sample position to screen space
+    vec4 offset = vec4(samplePos, 1.0);
+    offset = projection * offset; 
+    offset.xyz /= offset.w; 
+    offset.xyz = offset.xyz * 0.5 + 0.5; 
+
+    // Get the actual depth of the geometry at this sample point
+    // Note: This relies on view-space positions stored in the G-Buffer
+    vec3 samplePosWorld = texture(gPosition, offset.xy).xyz;
+    float sampleDepth = (view * vec4(samplePosWorld, 1.0)).z;
+
+    // Range check & Accumulate
+    float rangeCheck = smoothstep(0.0, 1.0, radius / abs(fragPos.z - sampleDepth));
+    occlusion += (sampleDepth >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
+}
+```
+
+#### Pass 2: Noise Reduction (Blur)
+Because the kernel samples are rotated randomly per pixel (to prevent banding), the raw SSAO output is noisy. A simple 4x4 box blur is applied in a second pass to smooth out the noise while preserving the low-frequency occlusion details.
+
+```glsl
+// 4x4 kernel centered on the texel
+float result = 0.0;
+for (int x = -2; x < 2; ++x) {
+    for (int y = -2; y < 2; ++y) {
+        vec2 offset = vec2(float(x), float(y)) * texelSize;
+        result += texture(ssaoInput, TexCoords + offset).r;
+    }
+}
+FragColor = result / 16.0;
+```
 
 #### SSAO Comparison
 Notice how SSAO adds subtle contact shadows where the brick surfaces meet, significantly increasing the sense of depth.
@@ -193,6 +261,21 @@ void SetupInstancingAttributes(const GLuint instanceVBO) const {
 ```
 
 By storing model matrices in a separate VBO and using `glVertexAttribDivisor`, the GPU can render thousands of instances in a single call, updating the transformation matrix only once per instance.
+
+The impact on performance is drastic. Below is a comparison between standard rendering (drawing objects one by one) and instanced rendering (drawing all objects in a single batch):
+
+<table style="width: 100%; border-collapse: collapse;">
+  <tr>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/no_instancing.gif" alt="Without Instancing" style="width: 100%; border-radius: 4px;">
+      <br><em>Standard Draw Calls (11.4 FPS)</em>
+    </td>
+    <td style="width: 50%; padding: 5px; text-align: center;">
+      <img src="/images/instancing.gif" alt="With Instancing" style="width: 100%; border-radius: 4px;">
+      <br><em>Hardware Instancing (60.0 FPS)</em>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -252,11 +335,6 @@ This implementation relies on the **Cook-Torrance BRDF**, focusing on microfacet
 Currently, this system exists in a standalone scene. Merging it with the main Deferred pipeline remains a technical challenge, primarily due to the increased complexity of the G-Buffer (requiring additional channels for Metallic, Roughness, and Ambient Occlusion) and the overhead of real-time IBL sampling.
 
 ---
-
-## 🔍 Technical Challenges & Lessons
-* **Memory Management**: Ensuring textures are shared via a `textures_loaded` vector to prevent redundant VRAM usage.
-* **Precision Issues**: Moving to 16-bit floating-point buffers for the G-Buffer to avoid "banding" in lighting gradients.
-* **Coordinate Systems**: Handling the UV-flip and winding order differences between Assimp's default and OpenGL's expectations.
 
 ## Conclusion
 Building this engine provided a deep understanding of how modern renderers handle data at scale. Moving from a single triangle to a deferred system was a challenge in both math and architecture, resulting in a flexible platform for further graphics experimentation.
