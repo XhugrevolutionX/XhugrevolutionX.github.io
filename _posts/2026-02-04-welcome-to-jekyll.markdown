@@ -6,6 +6,22 @@ categories: [Graphics Programming, C++, OpenGL]
 tags: [Deferred Shading, PBR, IBL, Instancing, SSAO, Post-Processing]
 ---
 
+<details>
+  <summary style="cursor: pointer; font-weight: bold;">Table of Contents</summary>
+  <ul>
+    <li><a href="#-engine-overview--features">Engine Overview & Features</a></li>
+    <li><a href="#-asset-architecture-the-model-mesh-hierarchy">Asset Architecture</a></li>
+    <li><a href="#-the-rendering-pipeline-deferred-shading">The Deferred Pipeline</a></li>
+    <li><a href="#-lighting--shadow-implementation">Lighting & Shadows</a></li>
+    <li><a href="#-performance-optimizations-gpu-instancing">Optimization (Instancing)</a></li>
+    <li><a href="#-post-processing-stack">Post-Processing Stack</a></li>
+    <li><a href="#-the-pbr-testbed--image-based-lighting">PBR & IBL Testbed</a></li>
+    <li><a href="#conclusion">Conclusion</a></li>
+  </ul>
+</details>
+
+---
+
 Developing a custom graphics engine is an exercise in managing the intricate dance between CPU data orchestration and GPU parallelism. What began as a foundational exploration of the graphics pipeline has evolved into a feature-complete OpenGL ES 3.0 renderer capable of deferred shading, physically-based effects, and high-density geometry instancing.
 
 In this post, I break down the core architecture and the technical hurdles overcome during the development of this engine.
@@ -226,11 +242,11 @@ Notice how SSAO adds subtle contact shadows where the brick surfaces meet, signi
 <table style="width: 100%; border-collapse: collapse;">
   <tr>
     <td style="width: 50%; padding: 5px; text-align: center;">
-      <img src="/images/no_ssao.png" alt="Without SSAO" style="width: 100%; border-radius: 4px;">
+      <img src="/images/no_ssao.jpg" alt="Without SSAO" style="width: 100%; border-radius: 4px;">
       <br><em>Without SSAO</em>
     </td>
     <td style="width: 50%; padding: 5px; text-align: center;">
-      <img src="/images/ssao.png" alt="With SSAO" style="width: 100%; border-radius: 4px;">
+      <img src="/images/ssao.jpg" alt="With SSAO" style="width: 100%; border-radius: 4px;">
       <br><em>With SSAO</em>
     </td>
   </tr>
