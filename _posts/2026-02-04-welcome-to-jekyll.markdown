@@ -242,11 +242,11 @@ Notice how SSAO adds subtle contact shadows where the brick surfaces meet, signi
 <table style="width: 100%; border-collapse: collapse;">
   <tr>
     <td style="width: 50%; padding: 5px; text-align: center;">
-      <img src="/images/no_ssao.jpg" alt="Without SSAO" style="width: 100%; border-radius: 4px;">
+      <img src="/images/no_ssao.png" alt="Without SSAO" style="width: 100%; border-radius: 4px;">
       <br><em>Without SSAO</em>
     </td>
     <td style="width: 50%; padding: 5px; text-align: center;">
-      <img src="/images/ssao.jpg" alt="With SSAO" style="width: 100%; border-radius: 4px;">
+      <img src="/images/ssao.png" alt="With SSAO" style="width: 100%; border-radius: 4px;">
       <br><em>With SSAO</em>
     </td>
   </tr>
